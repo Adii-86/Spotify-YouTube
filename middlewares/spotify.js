@@ -1,23 +1,9 @@
-const express = require("express");
-const playlist = require("./data/playlists.js");
-const tracks = require("./data/tracks.js");
-const router = express.Router();
-const axios = require("axios");
 const querystring = require("querystring");
-const dotenv = require("dotenv");
-
-dotenv.config();
-
-// Spotify credentials
-const client_id = process.env.CLIENT_ID;
-const client_secret = process.env.CLIENT_SECRET;
-const redirect_uri = process.env.REDIRECT_URL;
-
-let tokenStore = {
-  access_token: null,
-  refresh_token: null,
-  expires_at: null,
-};
+const keys = require("../config/spotifyKeys.js");
+const axios = require("axios");
+const playlist = require("../data/playlists.js");
+const tracks = require("../data/tracks.js");
+const tokens = require("../token/spotifyTokens.js");
 
 function generateRandomString(length) {
   const possible =
@@ -25,9 +11,9 @@ function generateRandomString(length) {
   return Array.from({ length }, () =>
     possible.charAt(Math.floor(Math.random() * possible.length))
   ).join("");
-} // protection from csrf attack
+} // prevents CSRF attack
 
-router.get("/login", (req, res) => {
+function auth(req, res) {
   const state = generateRandomString(16);
   const scope =
     "playlist-read-private playlist-read-collaborative user-read-private user-read-email";
@@ -36,32 +22,25 @@ router.get("/login", (req, res) => {
     "https://accounts.spotify.com/authorize?" +
     querystring.stringify({
       response_type: "code",
-      client_id: client_id,
+      client_id: keys.spotify_client_id,
       scope: scope,
-      redirect_uri: redirect_uri,
+      redirect_uri: keys.spotify_redirect_uri,
       state: state,
     });
   res.redirect(authURL);
-});
+}
 
-router.get("/callback", async (req, res) => {
+async function callback(req, res, next) {
   const code = req.query.code;
-  const error = req.query.error;
-
-  if (error) {
-    console.error("Authorization error:", error);
-    return res.status(400).send(`Authorization failed: ${error}`);
-  }
-
   try {
     const tokenResponse = await axios.post(
       "https://accounts.spotify.com/api/token",
       querystring.stringify({
         grant_type: "authorization_code",
         code: code,
-        redirect_uri: redirect_uri,
-        client_id: client_id,
-        client_secret: client_secret,
+        redirect_uri: keys.spotify_redirect_uri,
+        client_id: keys.spotify_client_id,
+        client_secret: keys.spotify_client_secret,
       }),
       {
         headers: {
@@ -72,19 +51,12 @@ router.get("/callback", async (req, res) => {
 
     const { access_token, refresh_token, expires_in } = tokenResponse.data;
 
-    tokenStore.access_token = access_token;
-    tokenStore.refresh_token = refresh_token;
-    tokenStore.expires_at = expires_in;
+    tokens.access_token = access_token;
+    tokens.refresh_token = refresh_token;
+    tokens.expires_at = expires_in;
 
-    console.log("Authentication successful");
-    res.send(`
-      <h1>Authentication Successful!</h1>
-      <p>You can now use the app.</p>
-      <ul>
-        <li><a href="/me">View Profile</a></li>
-        <li><a href="/playlists">View Playlists</a></li>
-      </ul>
-    `);
+    console.log("Authentication Succesfull");
+    next();
   } catch (error) {
     console.error(
       "Error getting tokens:",
@@ -92,11 +64,22 @@ router.get("/callback", async (req, res) => {
     );
     res.status(500).send("Failed to get access token. Please try again.");
   }
-});
+}
 
-router.get("/me", async (req, res) => {
+function callbackResponse(req, res) {
+  res.send(`
+    <h1>Authentication Successful!</h1>
+    <p>You can now use the app.</p>
+    <ul>
+      <li><a href="/spotify/me">View Profile</a></li>
+      <li><a href="/spotify/playlists">View Playlists</a></li>
+    </ul>
+  `);
+}
+
+async function fetchMe(req, res) {
   try {
-    const access_token = tokenStore.access_token;
+    const access_token = tokens.access_token;
 
     const response = await axios.get("https://api.spotify.com/v1/me", {
       headers: {
@@ -110,20 +93,19 @@ router.get("/me", async (req, res) => {
       "Error fetching user profile:",
       error.response?.data || error.message
     );
-
     if (error.message.includes("No access token")) {
       return res
         .status(401)
-        .json({ error: "Please login first", login_url: "/login" });
+        .json({ error: "Please login first", login_url: "/spotify/login" });
     }
 
     res.status(500).json({ error: "Failed to fetch user profile" });
   }
-});
+}
 
-router.get("/playlists", async (req, res) => {
+async function fetchPlaylist(req, res) {
   try {
-    const access_token = tokenStore.access_token;
+    const access_token = tokens.access_token;
 
     const response = await axios.get(
       "https://api.spotify.com/v1/me/playlists",
@@ -134,16 +116,13 @@ router.get("/playlists", async (req, res) => {
       }
     );
 
-    //res.json(response.data);
-    console.log(response.data);
-
     let html = "";
     const items = response.data["items"];
 
     for (let i = 0; i < items.length; i++) {
       console.log(items[i].name);
       playlist.push(items[i].name);
-      html += `<li><a href="/playlists/${items[i].id}/tracks">${items[i].name}</a></li>`;
+      html += `<li><a href="/spotify/playlists/${items[i].id}/tracks">${items[i].name}</a></li>`;
     }
 
     res.send(`
@@ -161,27 +140,16 @@ router.get("/playlists", async (req, res) => {
     if (error.message.includes("No access token")) {
       return res
         .status(401)
-        .json({ error: "Please login first", login_url: "/login" });
+        .json({ error: "Please login first", login_url: "/spotify/login" });
     }
 
     res.status(500).json({ error: "Failed to fetch playlists" });
   }
-});
+}
 
-router.get("/", (req, res) => {
-  res.json({
-    message: "Spotify API Server is running",
-    endpoints: {
-      login: "/login",
-      profile: "/me",
-      playlists: "/playlists",
-    },
-  });
-});
-
-router.get("/playlists/:id/tracks", async (req, res) => {
+async function loadPlaylist(req, res) {
   try {
-    const access_token = tokenStore.access_token;
+    const access_token = tokens.access_token;
     const response = await axios.get(
       `https://api.spotify.com/v1/playlists/${req.params.id}/tracks`,
       {
@@ -208,6 +176,13 @@ router.get("/playlists/:id/tracks", async (req, res) => {
     console.error("Can't get the tracks");
     console.log(error.message);
   }
-});
+}
 
-module.exports = router;
+module.exports = {
+  auth,
+  callback,
+  callbackResponse,
+  fetchMe,
+  fetchPlaylist,
+  loadPlaylist,
+};
