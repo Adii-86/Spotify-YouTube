@@ -4,17 +4,10 @@ const axios = require("axios");
 const playlist = require("../data/playlists.js");
 const tracks = require("../data/tracks.js");
 const tokens = require("../token/spotifyTokens.js");
-
-function generateRandomString(length) {
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  return Array.from({ length }, () =>
-    possible.charAt(Math.floor(Math.random() * possible.length))
-  ).join("");
-} // prevents CSRF attack
+const crypto = require("crypto");
 
 function auth(req, res) {
-  const state = generateRandomString(16);
+  const state = crypto.randomBytes(32).toString("hex");
   const scope =
     "playlist-read-private playlist-read-collaborative user-read-private user-read-email";
 
